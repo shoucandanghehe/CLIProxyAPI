@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 )
 
@@ -227,5 +228,58 @@ func TestPersistedAntigravityCapabilityHintsAreScopedToOverrides(t *testing.T) {
 	}
 	if _, ok := parsePersistedAntigravityCapabilityHints(unscoped, project, endpoint, uaScope); ok {
 		t.Fatal("catalogs without override fields must not load for an override")
+	}
+}
+
+func TestAntigravityArgonModelsRegisterForCLIIdentity(t *testing.T) {
+	const configuredUA = "antigravity/cli/1.3.4 (aidev_client; os_type=linux; arch=amd64)"
+	for _, tc := range []struct {
+		name      string
+		userAgent string
+	}{
+		{name: "default"},
+		{name: "configured", userAgent: configuredUA},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetAntigravityCapabilityCache()
+			t.Cleanup(resetAntigravityCapabilityCache)
+			probed := make(chan string, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				userAgent := r.Header.Get("User-Agent")
+				probed <- userAgent
+				if strings.HasPrefix(userAgent, "antigravity/cli/") {
+					_, _ = w.Write([]byte(`{"models":{"gemini-4-argon-high":{},"gemini-4-argon-medium":{},"gemini-4-argon-low":{}}}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"models":{}}`))
+			}))
+			t.Cleanup(server.Close)
+			manager := coreauth.NewManager(nil, nil, nil)
+			svc := &Service{cfg: &config.Config{}, coreManager: manager}
+			auth := antigravityTestAuth("argon-"+tc.name, server.URL)
+			if tc.userAgent != "" {
+				auth.Metadata["user_agent"] = tc.userAgent
+			}
+			auth, errRegister := manager.Register(t.Context(), auth)
+			if errRegister != nil {
+				t.Fatal(errRegister)
+			}
+			t.Cleanup(func() { GlobalModelRegistry().UnregisterClient(auth.ID) })
+			svc.registerModelsForAuth(t.Context(), auth)
+			svc.WaitAntigravityProbes()
+			select {
+			case userAgent := <-probed:
+				if !strings.HasPrefix(userAgent, "antigravity/cli/") || (tc.userAgent != "" && userAgent != tc.userAgent) {
+					t.Errorf("model probe used unexpected User-Agent %q", userAgent)
+				}
+			default:
+				t.Fatal("model registration did not query the upstream catalog")
+			}
+			for _, model := range []string{"gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low"} {
+				if !GlobalModelRegistry().ClientSupportsModel(auth.ID, model) {
+					t.Errorf("CLI model %s is missing from the account registry", model)
+				}
+			}
+		})
 	}
 }

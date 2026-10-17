@@ -266,7 +266,7 @@ func AntigravityDefaultCallbackURI() string {
 	return fmt.Sprintf("http://localhost:%d/oauth-callback", AntigravityDefaultCallbackPort)
 }
 
-// AntigravityUserAgent returns the canonical User-Agent string used by the Antigravity Hub family.
+// AntigravityUserAgent returns the canonical User-Agent string used by the Antigravity CLI family.
 func AntigravityUserAgent() string {
 	return misc.AntigravityUserAgent()
 }
